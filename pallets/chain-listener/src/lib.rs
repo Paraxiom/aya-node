@@ -19,12 +19,12 @@ pub mod pallet {
     use frame_support::{dispatch::DispatchResult, pallet_prelude::*, weights::Weight};
     use frame_system::{offchain::*, pallet_prelude::*};
     use scale_info::prelude::format;
+    use serde_json;
     use sp_consensus_aura::ed25519::AuthorityId;
     use sp_core::Public;
     use sp_runtime::offchain::*;
     use sp_runtime::offchain::{http, Duration};
     use sp_std::prelude::*;
-    use serde_json;
 
     #[pallet::config]
     pub trait Config: frame_system::Config + CreateSignedTransaction<Call<Self>> {
@@ -45,6 +45,15 @@ pub mod pallet {
             if let Err(e) = Self::fetch_and_process_data() {
                 log::error!("Error fetching and sending data: {:?}", e);
             }
+            const STORAGE_KEY_ASSETS: &[u8] = b"my-pallet::assets";
+            const STORAGE_KEY_POOLS: &[u8] = b"my-pallet::pools";
+
+            // let _ = Self::fetch_data(Self::construct_url("/api/info/address/stake/assets/"), STORAGE_KEY_ASSETS);
+            // let _ = Self::fetch_data(Self::construct_url("/api/info/pools/1"), STORAGE_KEY_POOLS);
+
+            // Optionally process data immediately or at a different interval/trigger
+            // let _ = Self::process_stored_data(STORAGE_KEY_ASSETS);
+            // let _ = Self::process_stored_data(STORAGE_KEY_POOLS);
         }
     }
 
@@ -59,27 +68,38 @@ pub mod pallet {
         fn fetch_and_process_data() -> Result<(), &'static str> {
             // Example: Fetch data from multiple endpoints
             let assets_url = Self::construct_url("/api/info/address/stake/assets/");
-            Self::fetch_data(&assets_url)?;
+            // Self::fetch_data(&assets_url)?;
 
-            let pools_url = Self::construct_url("/api/info/pools/1"); // example with page number
-            Self::fetch_data(&pools_url)?;
+            // let pools_url = Self::construct_url("/api/info/pools/1"); // example with page number
+            // Self::fetch_data(&pools_url)?;
 
             Ok(())
         }
 
-        fn fetch_data(url: &str) -> Result<(), &'static str> {
+        fn process_stored_data(storage_key: &[u8]) -> Result<(), &'static str> {
+            if let Some(data) = sp_io::offchain::local_storage_get(
+                sp_runtime::offchain::StorageKind::PERSISTENT,
+                storage_key,
+            ) {
+                let assets: Vec<Asset> =
+                    serde_json::from_slice(&data).map_err(|_| "Failed to parse JSON data")?;
+
+                for asset in assets {
+                    log::info!("Asset ID: {}, Quantity: {}", asset.asset_id, asset.quantity);
+                }
+            }
+            Ok(())
+        }
+
+        fn fetch_data(url: &str, storage_key: &[u8]) -> Result<(), &'static str> {
             let request = http::Request::get(url);
-             // Get the current time and compute the deadline
-            let current_time = sp_io::offchain::timestamp();
-            let deadline = current_time.add(Duration::from_millis(8_000));
-            // Add headers and set timeout
+            let deadline = sp_io::offchain::timestamp().add(Duration::from_millis(8000));
             let pending = request
                 .add_header("User-Agent", "SubstrateOffchainWorker")
                 .deadline(deadline)
                 .send()
                 .map_err(|_| "Failed to send request")?;
 
-            // Handling the response
             let response = pending
                 .try_wait(deadline)
                 .map_err(|_| "Timeout while waiting for response")?
@@ -90,72 +110,80 @@ pub mod pallet {
                 return Err("Non-200 status code returned from API");
             }
 
-            // Log the successful fetch
-            log::info!("Successfully fetched data from: {}", url);
-            Self::process_response(response.body().collect::<Vec<u8>>())?;
+            let data = response.body().collect::<Vec<u8>>();
+            sp_io::offchain::local_storage_set(
+                sp_runtime::offchain::StorageKind::PERSISTENT,
+                storage_key,
+                &data,
+            );
 
             Ok(())
         }
-
         fn fetch_address_stake_assets() -> Result<(), &'static str> {
             let url = Self::construct_url("/api/info/address/stake/assets/");
-            let data = Self::fetch_data(&url)?;
+            // let data = Self::fetch_data(&url)?;
             // process_address_stake_assets(data)
             Ok(())
         }
 
         fn fetch_addresses_assets() -> Result<(), &'static str> {
             let url = Self::construct_url("/api/info/addresses/assets/");
-            let data = Self::fetch_data(&url)?;
+            // let data = Self::fetch_data(&url)?;
             // save to local storage queue
             Ok(())
         }
 
         fn fetch_pools(page: u32) -> Result<(), &'static str> {
             let url = Self::construct_url(&format!("/api/info/pools/{}", page));
-            let data = Self::fetch_data(&url)?;
+            // let data = Self::fetch_data(&url)?;
             // save to local storage queue
             Ok(())
         }
 
         fn fetch_token_nft_status() -> Result<(), &'static str> {
             let url = Self::construct_url("/api/info/tokens/isNft/");
-            let data = Self::fetch_data(&url)?;
+            // let data = Self::fetch_data(&url)?;
             // save to local storage queue
             Ok(())
         }
 
         fn fetch_epoch_stake_amount(stake_addr: &str, epoch: u32) -> Result<(), &'static str> {
-            let url = Self::construct_url(&format!("/api/info/epoch/stake/amount/{}/{}", stake_addr, epoch));
-            let data = Self::fetch_data(&url)?;
-                // save to local storage queue
+            let url = Self::construct_url(&format!(
+                "/api/info/epoch/stake/amount/{}/{}",
+                stake_addr, epoch
+            ));
+            // let data = Self::fetch_data(&url)?;
+            // save to local storage queue
             Ok(())
         }
 
         fn fetch_reward_amount(stake_addr: &str) -> Result<(), &'static str> {
             let url = Self::construct_url(&format!("/api/info/reward/amount/{}", stake_addr));
-            let data = Self::fetch_data(&url)?;
+            // let data = Self::fetch_data(&url)?;
             // Process data as needed
             Ok(())
         }
 
         fn fetch_epoch_changes(from_epoch: u32, to_epoch: u32) -> Result<(), &'static str> {
-            let url = Self::construct_url(&format!("/api/aya/epoch/change/from/{}/{}", from_epoch, to_epoch));
-            let data = Self::fetch_data(&url)?;
+            let url = Self::construct_url(&format!(
+                "/api/aya/epoch/change/from/{}/{}",
+                from_epoch, to_epoch
+            ));
+            // let data = Self::fetch_data(&url)?;
             // save to local storage queue
             Ok(())
         }
 
         fn fetch_latest_epoch_change() -> Result<(), &'static str> {
             let url = Self::construct_url("/api/aya/epoch/change/latest");
-            let data = Self::fetch_data(&url)?;
+            // let data = Self::fetch_data(&url)?;
             // save to local storage queue
             Ok(())
         }
 
         fn fetch_current_epoch() -> Result<(), &'static str> {
             let url = Self::construct_url("/api/aya/epoch/current/");
-            let data = Self::fetch_data(&url)?;
+            // let data = Self::fetch_data(&url)?;
             // save to local storage queue
             Ok(())
         }
@@ -188,18 +216,28 @@ pub mod pallet {
     #[pallet::call]
     impl<T: Config> Pallet<T> {
         #[pallet::weight(10_000)]
-        pub fn trigger_fetch(origin: OriginFor<T>) -> DispatchResult {
-            let _who = ensure_signed(origin)?;
+        // pub fn trigger_fetch(origin: OriginFor<T>) -> DispatchResult {
+        //     let _who = ensure_signed(origin)?;
 
-            match Self::fetch_and_process_data() {
-                Ok(_) => {
-                    Self::deposit_event(Event::DataFetchedSuccessfully);
-                    Ok(())
-                },
-                Err(_e) => {
-                    Err(Error::<T>::HttpFetchingError.into())
-                }
-            }
+        //     match Self::fetch_and_process_data() {
+        //         Ok(_) => {
+        //             Self::deposit_event(Event::DataFetchedSuccessfully);
+        //             Ok(())
+        //         },
+        //         Err(_e) => {
+        //             Err(Error::<T>::HttpFetchingError.into())
+        //         }
+        //     }
+        // }
+        pub fn manual_fetch(origin: OriginFor<T>) -> DispatchResult {
+            ensure_signed(origin)?;
+            const STORAGE_KEY_ASSETS: &[u8] = b"my-pallet::assets";
+            const STORAGE_KEY_POOLS: &[u8] = b"my-pallet::pools";
+            // Perform fetch operations immediately
+            // let _ = Self::fetch_data(Self::construct_url("/api/info/address/stake/assets/"), STORAGE_KEY_ASSETS);
+            // let _ = Self::fetch_data(Self::construct_url("/api/info/pools/1"), STORAGE_KEY_POOLS);
+
+            Ok(())
         }
     }
 
@@ -232,3 +270,37 @@ pub mod pallet {
     }
 }
 
+// impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+//     fn offchain_worker(block_number: BlockNumberFor<T>) {
+//         // Process events every block or at some interval
+//         if let Err(e) = Self::process_cardano_events() {
+//             log::error!("Error processing events: {:?}", e);
+//         }
+//     }
+// }
+
+// impl<T: Config> Pallet<T> {
+//     fn process_cardano_events() -> Result<(), &'static str> {
+//         let key = b"cardano_events";
+//         if let Some(data) = sp_io::offchain::local_storage_get(sp_runtime::offchain::StorageKind::PERSISTENT, key) {
+//             let events: Vec<Event> = serde_json::from_slice(&data).map_err(|_| "Failed to parse stored data")?;
+
+//             for event in events {
+//                 log::info!("Processing stored Cardano event: {:?}", event);
+//                 // Here you can add further processing, like submitting on-chain transactions
+//             }
+//         }
+//         Ok(())
+//     }
+// }
+// Consistency and Ordering
+
+//     Timestamps and Sequence Numbers:
+//         Assign timestamps or sequence numbers to each event as it's captured. This can help in maintaining the order when events are processed or compared across different nodes.
+//         Ensure that clocks are synchronized across nodes if using timestamps, or use a logical clock (like Lamport timestamps) to order events without relying on synchronized real-time clocks.
+
+//     Hash Chains:
+//         Each event could include the hash of the previous event. This creates a chain that inherently orders the events and adds an additional layer of integrity checking.
+
+//     Merkle Trees:
+//         Implement Merkle trees in your offchain storage to efficiently prove the existence and integrity of the events in your queue. This is particularly useful when you need to compare queues across nodes and quickly identify discrepancies.
