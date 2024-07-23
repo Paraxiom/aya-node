@@ -1,0 +1,91 @@
+digraph OracleSystem2 {
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=8];
+
+    subgraph cluster_external {
+        label="External Data Sources";
+        style=filled;
+        color=lightgrey;
+        node [style=filled,color=white];
+        
+        ExternalBlockchains [label="External\nBlockchains"];
+        APIServices [label="API\nServices"];
+        EmergencyServices [label="Emergency\nData Services"];
+    }
+
+    subgraph cluster_oracle {
+        label="Oracle System2";
+        style=filled;
+        color=lightblue;
+
+        subgraph cluster_sources {
+            label="Event Sources";
+            style=filled;
+            color=lightgreen;
+            node [style=filled,color=white];
+            
+            Reporters [label="External\nReporters"];
+            OffchainWorkers [label="Offchain\nWorkers"];
+            Extrinsics [label="Extrinsic\nSubmissions"];
+        }
+
+        PriorityQueue [label="Priority Queue", shape=cylinder];
+
+        subgraph cluster_processing {
+            label="Event Processing";
+            style=filled;
+            color=lightyellow;
+            node [style=filled,color=white];
+
+            Validation [label="Initial\nValidation"];
+            Categorization [label="Event\nCategorization"];
+            
+            subgraph cluster_handlers {
+                label="Event Handlers";
+                style=filled;
+                color=lightpink;
+                
+                SystemEvents [label="System\nEvents"];
+                CrossChainEvents [label="Cross-Chain\nEvents"];
+                ExternalWorldEvents [label="External World\nEvents"];
+            }
+        }
+
+        LightClients [label="Light Clients", shape=diamond];
+    }
+
+    Governance [label="Governance", shape=hexagon];
+
+    // Connections
+    ExternalBlockchains -> LightClients [dir=both, label="Sync"];
+    APIServices -> OffchainWorkers [label="Pull Data"];
+    EmergencyServices -> Extrinsics [label="Push\n(Emergency)"];
+    
+    Reporters -> PriorityQueue [label="Push"];
+    OffchainWorkers -> PriorityQueue [label="Submit\nPulled Data"];
+    Extrinsics -> PriorityQueue [label="Submit"];
+    
+    PriorityQueue -> Validation;
+    Validation -> Categorization;
+    
+    Categorization -> SystemEvents;
+    Categorization -> CrossChainEvents;
+    Categorization -> ExternalWorldEvents;
+    
+    CrossChainEvents -> LightClients [dir=both, label="Verify"];
+    
+    Governance -> PriorityQueue [dir=both, label="Configure"];
+    Governance -> Categorization [dir=both, label="Manage Rules"];
+    Governance -> LightClients [label="Update"];
+    Governance -> OffchainWorkers [label="Configure\nPull Intervals"];
+
+    // Invisible edges for layout
+    {rank=same; ExternalBlockchains APIServices EmergencyServices}
+    {rank=same; Reporters OffchainWorkers Extrinsics}
+    {rank=same; SystemEvents CrossChainEvents ExternalWorldEvents}
+    Reporters -> OffchainWorkers [style=invis];
+    OffchainWorkers -> Extrinsics [style=invis];
+    SystemEvents -> CrossChainEvents [style=invis];
+    CrossChainEvents -> ExternalWorldEvents [style=invis];
+}

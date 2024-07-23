@@ -5,49 +5,12 @@
 #![recursion_limit = "256"]
 #![allow(clippy::new_without_default, clippy::or_fun_call)]
 #![cfg_attr(feature = "runtime-benchmarks", warn(unused_crate_dependencies))]
-
-#[cfg(feature = "runtime-benchmarks")]
 #[macro_use]
-extern crate frame_benchmarking; // Frontier
-use fp_account::EthereumSignature;
-use fp_evm::weight_per_gas;
-use fp_rpc::TransactionStatus;
-use frame_support::{
-    derive_impl,
-    dynamic_params::dynamic_pallet_params,
-    dynamic_params::dynamic_params,
-    genesis_builder_helper::{build_config, create_default_config},
-    pallet_prelude::{DispatchClass, MaxEncodedLen, RuntimeDebug},
-    parameter_types,
-    traits::{
-        AsEnsureOriginWithArg, ConstBool, ConstU128, ConstU32, ConstU8, EnsureOriginWithArg,
-        FindAuthor, InstanceFilter, Nothing, OnFinalize, OnTimestampSet,
-    },
-    weights::{
-        constants::{BlockExecutionWeight, ExtrinsicBaseWeight, WEIGHT_REF_TIME_PER_MILLIS},
-        IdentityFee, Weight,
-    },
-};
-// Substrate FRAME
-#[cfg(feature = "with-paritydb-weights")]
-use frame_support::weights::constants::ParityDbWeight as RuntimeDbWeight;
-#[cfg(feature = "with-rocksdb-weights")]
-use frame_support::weights::constants::RocksDbWeight as RuntimeDbWeight;
-use frame_system::{EnsureRoot, EnsureSigned};
-// A few exports that help ease life for downstream crates.
-pub use frame_system::Call as SystemCall;
-pub use pallet_balances::Call as BalancesCall;
-use pallet_ethereum::{
-    Call::transact, PostLogContent, Transaction as EthereumTransaction, TransactionAction,
-    TransactionData,
-};
-use pallet_evm::{
-    Account as EVMAccount, EnsureAccountId20, FeeCalculator, IdentityAddressMapping, Runner,
-};
-use pallet_im_online::sr25519::AuthorityId as ImOnlineId;
-pub use pallet_timestamp::Call as TimestampCall;
-use pallet_transaction_payment::Multiplier;
-use pallet_transaction_payment::{ConstFeeMultiplier, CurrencyAdapter};
+extern crate environmental;
+
+// Make the WASM binary available.
+#[cfg(feature = "std")]
+include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 use scale_codec::{Decode, Encode};
 use sp_api::impl_runtime_apis;
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
@@ -74,16 +37,62 @@ use sp_runtime::{
 use sp_std::{marker::PhantomData, prelude::*};
 use sp_version::RuntimeVersion;
 use static_assertions::const_assert;
+// Substrate FRAME
+#[cfg(feature = "with-paritydb-weights")]
+use frame_support::weights::constants::ParityDbWeight as RuntimeDbWeight;
+#[cfg(feature = "with-rocksdb-weights")]
+use frame_support::weights::constants::RocksDbWeight as RuntimeDbWeight;
+use frame_support::{
+    derive_impl,
+    dynamic_params::dynamic_pallet_params,
+    dynamic_params::dynamic_params,
+    genesis_builder_helper::{build_config, create_default_config},
+    pallet_prelude::DispatchClass,
+    parameter_types,
+    traits::{
+        AsEnsureOriginWithArg, ConstBool, ConstU128, ConstU32, ConstU8, EnsureOriginWithArg,
+        FindAuthor, Nothing, OnFinalize, OnTimestampSet,
+    },
+    weights::{
+        constants::{BlockExecutionWeight, ExtrinsicBaseWeight, WEIGHT_REF_TIME_PER_MILLIS},
+        IdentityFee, Weight,
+    },
+};
+use frame_system::{EnsureRoot, EnsureSigned};
+use pallet_transaction_payment::{ConstFeeMultiplier, CurrencyAdapter};
+// Frontier
+use fp_account::EthereumSignature;
+use fp_evm::weight_per_gas;
+use fp_rpc::TransactionStatus;
+use pallet_ethereum::{
+    Call::transact, PostLogContent, Transaction as EthereumTransaction, TransactionAction,
+    TransactionData,
+};
+use pallet_evm::{
+    Account as EVMAccount, EnsureAccountId20, FeeCalculator, IdentityAddressMapping, Runner,
+};
+use pallet_im_online::sr25519::AuthorityId as ImOnlineId;
 
-use precompiles::FrontierPrecompiles;
+use sp_core::crypto::AccountId32;
+use sp_runtime::MultiSigner;
+mod account_id_conversion;
 
-// Make the WASM binary available.
-#[cfg(feature = "std")]
-include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
+use account_id_conversion::AccountId32Wrapper;
+use fp_account::AccountId20;
+
+pub use frame_system::Call as SystemCall;
+pub use pallet_balances::Call as BalancesCall;
+pub use pallet_timestamp::Call as TimestampCall;
+use pallet_transaction_payment::Multiplier;
+
+pub use pallet_epoch;
+
 mod precompiles;
 
 /// Runtime API definition for assets.
 pub mod assets_api;
+
+use precompiles::FrontierPrecompiles;
 
 /// Type of block number.
 pub type BlockNumber = u32;
@@ -119,9 +128,9 @@ pub type DigestItem = generic::DigestItem;
 /// of data like extrinsics, allowing for them to continue syncing the network through upgrades
 /// to even the core data structures.
 pub mod opaque {
-    pub use sp_runtime::OpaqueExtrinsic as UncheckedExtrinsic;
-
     use super::*;
+
+    pub use sp_runtime::OpaqueExtrinsic as UncheckedExtrinsic;
 
     /// Opaque block header type.
     pub type Header = generic::Header<BlockNumber, BlakeTwo256>;
@@ -144,7 +153,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
     spec_name: create_runtime_str!("aya-node"),
     impl_name: create_runtime_str!("aya-node"),
     authoring_version: 1,
-    spec_version: 2,
+    spec_version: 1,
     impl_version: 1,
     apis: RUNTIME_API_VERSIONS,
     transaction_version: 1,
@@ -244,7 +253,8 @@ impl frame_system::Config for Runtime {
     /// The hashing algorithm used.
     type Hashing = Hashing;
     /// The identifier used to distinguish between accounts.
-    type AccountId = AccountId;
+    // type AccountId = AccountId;
+    type AccountId = AccountId20;
     /// The lookup mechanism to get account ID from whatever is passed in dispatchers.
     type Lookup = IdentityLookup<AccountId>;
     /// The block type.
@@ -272,78 +282,6 @@ impl frame_system::Config for Runtime {
     /// The set code logic, just the default since we're not a parachain.
     type OnSetCode = ();
     type MaxConsumers = ConstU32<16>;
-}
-
-parameter_types! {
-    // One storage item; key size 32, value size 8; .
-    pub const ProxyDepositBase: Balance = deposit(1, 8);
-    // Additional storage item size of 33 bytes.
-    pub const ProxyDepositFactor: Balance = deposit(0, 33);
-    pub const AnnouncementDepositBase: Balance = deposit(1, 8);
-    pub const AnnouncementDepositFactor: Balance = deposit(0, 66);
-}
-
-/// The type used to represent the kinds of proxying allowed.
-#[derive(
-    Copy,
-    Clone,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd,
-    Encode,
-    Decode,
-    RuntimeDebug,
-    MaxEncodedLen,
-    scale_info::TypeInfo,
-)]
-pub enum ProxyType {
-    Any,
-    NonTransfer,
-}
-impl Default for ProxyType {
-    fn default() -> Self {
-        Self::Any
-    }
-}
-impl InstanceFilter<RuntimeCall> for ProxyType {
-    fn filter(&self, c: &RuntimeCall) -> bool {
-        match self {
-            ProxyType::Any => true,
-            ProxyType::NonTransfer => !matches!(
-                c,
-                RuntimeCall::Balances(..)
-                    | RuntimeCall::Assets(..)
-                    | RuntimeCall::Uniques(..)
-                    | RuntimeCall::Indices(pallet_indices::Call::transfer { .. })
-                    | RuntimeCall::Session(..)
-            ),
-        }
-    }
-    fn is_superset(&self, o: &Self) -> bool {
-        match (self, o) {
-            (x, y) if x == y => true,
-            (ProxyType::Any, _) => true,
-            (_, ProxyType::Any) => false,
-            (ProxyType::NonTransfer, _) => true,
-            _ => false,
-        }
-    }
-}
-
-impl pallet_proxy::Config for Runtime {
-    type RuntimeEvent = RuntimeEvent;
-    type RuntimeCall = RuntimeCall;
-    type Currency = Balances;
-    type ProxyType = ProxyType;
-    type ProxyDepositBase = ProxyDepositBase;
-    type ProxyDepositFactor = ProxyDepositFactor;
-    type MaxProxies = ConstU32<32>;
-    type WeightInfo = pallet_proxy::weights::SubstrateWeight<Runtime>;
-    type MaxPending = ConstU32<32>;
-    type CallHasher = BlakeTwo256;
-    type AnnouncementDepositBase = AnnouncementDepositBase;
-    type AnnouncementDepositFactor = AnnouncementDepositFactor;
 }
 
 parameter_types! {
@@ -401,15 +339,67 @@ impl substrate_validator_set::Config for Runtime {
     type WeightInfo = ();
 }
 
+#[derive(PartialEq, Eq, Clone, Debug)]
+pub struct ValidatorId(pub AccountId20);
+
+impl From<ValidatorId> for AccountId32 {
+    fn from(val: ValidatorId) -> Self {
+        let mut bytes = [0u8; 32];
+        let account_bytes: &[u8] = val.0.as_ref();
+        bytes[0..20].copy_from_slice(&account_bytes[0..20]);
+        AccountId32::from(bytes)
+    }
+}
+
+impl From<AccountId20> for ValidatorId {
+    fn from(account_id: AccountId20) -> Self {
+        ValidatorId(account_id)
+    }
+}
+
+impl From<ValidatorId> for AccountId20 {
+    fn from(val: ValidatorId) -> Self {
+        val.0
+    }
+}
+
+pub struct UnsignedPriority;
+
+impl Get<TransactionPriority> for UnsignedPriority {
+    fn get() -> TransactionPriority {
+        TransactionPriority::max_value()
+    }
+}
+
+impl pallet_epoch::Config for Runtime {
+    type RuntimeEvent = RuntimeEvent;
+    type WeightInfo = ();
+    type AuthorityId = AuraId;
+    type ValidatorId = ValidatorId;
+    type AccountId32Convert = AccountId32Wrapper;
+    type Call = RuntimeCall;
+    type UnsignedPriority = UnsignedPriority;
+}
+// impl pallet_registration::Config for Runtime {
+//     type RuntimeEvent = RuntimeEvent;
+//     type WeightInfo = ();
+// type AuthorityId = AuraId;
+// type ValidatorId = MVa  AccountId;
+// type AccountId32Convert = MockAccountId32Convert;
+// type Call = RuntimeCall;
+// type UnsignedPriority = frame_support::traits::ConstU64<100>;
+// }
+
 parameter_types! {
-    pub const Period: u32 = 1 * DAYS;
+    pub const Period: u32 = 2 * MINUTES;
     pub const Offset: u32 = 0;
 }
 
 impl pallet_session::Config for Runtime {
     type RuntimeEvent = RuntimeEvent;
-    type ValidatorId = AccountId;
+
     type ValidatorIdOf = substrate_validator_set::ValidatorOf<Self>;
+    type ValidatorId = <Self as frame_system::Config>::AccountId;
     type ShouldEndSession = pallet_session::PeriodicSessions<Period, Offset>;
     type NextSessionRotation = pallet_session::PeriodicSessions<Period, Offset>;
     type SessionManager = ValidatorSet;
@@ -804,9 +794,8 @@ impl pallet_parameters::Config for Runtime {
 
 #[frame_support::pallet]
 pub mod pallet_manual_seal {
-    use frame_support::pallet_prelude::*;
-
     use super::*;
+    use frame_support::pallet_prelude::*;
 
     #[pallet::pallet]
     pub struct Pallet<T>(PhantomData<T>);
@@ -838,10 +827,10 @@ impl pallet_insecure_randomness_collective_flip::Config for Runtime {}
 frame_support::construct_runtime!(
     pub enum Runtime {
         System: frame_system,
-        Proxy: pallet_proxy,
         Timestamp: pallet_timestamp,
         Balances: pallet_balances,
         ValidatorSet: substrate_validator_set,
+        Epoch: pallet_epoch::{Pallet, Call, Storage, Event<T>, ValidateUnsigned},
         Session: pallet_session,
         ImOnline: pallet_im_online,
         Aura: pallet_aura,
@@ -1008,6 +997,10 @@ impl fp_self_contained::SelfContainedCall for RuntimeCall {
         }
     }
 }
+
+#[cfg(feature = "runtime-benchmarks")]
+#[macro_use]
+extern crate frame_benchmarking;
 
 #[cfg(feature = "runtime-benchmarks")]
 mod benches {
@@ -1535,7 +1528,6 @@ pub mod dynamic_params {
 #[cfg(test)]
 mod tests {
     use super::{Runtime, WeightPerGas};
-
     #[test]
     fn configured_base_extrinsic_weight_is_evm_compatible() {
         let min_ethereum_transaction_weight = WeightPerGas::get() * 21_000;

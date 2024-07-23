@@ -1,0 +1,21 @@
+[package]
+name = "pallet-dispute-mechanism"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sylvain Cormier sylvaincormier@protonmail.com"]
+description = "Audit trail pallet for the decentralized oracle system"
+
+[dependencies]
+frame-support = { workspace = true }
+frame-system = { workspace = true }
+scale-info = { workspace = true, features = ["derive"] }
+sp-std = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+    "frame-support/std",
+    "frame-system/std",
+    "scale-info/std",
+    "sp-std/std",
+]

@@ -1,0 +1,43 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+
+\title{Cross-Chain Block Time and Reorganization Analysis}
+\author{Your Name}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\section{Block Times}
+Cardano: Approximately 20 seconds
+
+Ethereum: 12-14 seconds
+
+BNB Chain: Approximately 3 seconds
+
+\section{Chain Reorganizations}
+The frequency and depth of chain reorganizations are affected by block times:
+
+BNB Chain: More frequent but shallow reorgs due to faster block times
+
+Ethereum: Balanced between frequency and depth of potential reorgs
+
+Cardano: Less frequent but potentially deeper reorgs due to slower block times
+
+\section{Timelocks and Cross-Chain Operations}
+A 1-minute timelock translates differently across chains:
+
+Cardano: Approximately 3 blocks
+
+Ethereum: 4-5 blocks
+
+BNB Chain: About 20 blocks
+
+This disparity can lead to synchronization challenges, different levels of finality, and increased complexity in cross-chain operations.
+
+\section{Conclusion}
+The varying block times across Cardano, Ethereum, and BNB Chain present significant challenges for cross-chain operations, particularly in terms of synchronization, finality, and timelock management. Careful consideration of these factors is crucial when designing cross-chain protocols and operations.
+
+\end{document}

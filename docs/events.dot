@@ -1,0 +1,67 @@
+digraph OracleSystem {
+    rankdir=LR;
+    node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=8];
+
+    subgraph cluster_sources {
+        label="Event Sources";
+        style=filled;
+        color=lightgrey;
+        node [style=filled,color=white];
+        
+        Reporters [label="External\nReporters"];
+        OffchainWorkers [label="Offchain\nWorkers"];
+        Extrinsics [label="Extrinsic\nSubmissions"];
+    }
+
+    PriorityQueue [label="Priority Queue", shape=cylinder];
+
+    subgraph cluster_processing {
+        label="Event Processing";
+        style=filled;
+        color=lightblue;
+        node [style=filled,color=white];
+
+        Validation [label="Initial\nValidation"];
+        Categorization [label="Event\nCategorization"];
+        
+        subgraph cluster_handlers {
+            label="Event Handlers";
+            style=filled;
+            color=lightyellow;
+            
+            SystemEvents [label="System\nEvents"];
+            CrossChainEvents [label="Cross-Chain\nEvents"];
+            ExternalWorldEvents [label="External World\nEvents"];
+        }
+    }
+
+    LightClients [label="Light Clients", shape=diamond];
+    Governance [label="Governance", shape=hexagon];
+
+    // Connections
+    Reporters -> PriorityQueue [label="Push"];
+    OffchainWorkers -> PriorityQueue [label="Pull"];
+    Extrinsics -> PriorityQueue;
+    
+    PriorityQueue -> Validation;
+    Validation -> Categorization;
+    
+    Categorization -> SystemEvents;
+    Categorization -> CrossChainEvents;
+    Categorization -> ExternalWorldEvents;
+    
+    CrossChainEvents -> LightClients [dir=both, label="Verify"];
+    
+    Governance -> PriorityQueue [dir=both, label="Configure"];
+    Governance -> Categorization [dir=both, label="Manage Rules"];
+    Governance -> LightClients [label="Update"];
+
+    // Invisible edges for layout
+    {rank=same; Reporters OffchainWorkers Extrinsics}
+    {rank=same; SystemEvents CrossChainEvents ExternalWorldEvents}
+    Reporters -> OffchainWorkers [style=invis];
+    OffchainWorkers -> Extrinsics [style=invis];
+    SystemEvents -> CrossChainEvents [style=invis];
+    CrossChainEvents -> ExternalWorldEvents [style=invis];
+}

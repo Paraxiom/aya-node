@@ -1,6 +1,6 @@
 [package]
 name = "aya-node"
-version = "0.3.0"
+version = "0.1.0"
 license = "Unlicense"
 build = "build.rs"
 description = "A fresh FRAME-based Substrate node."
@@ -18,9 +18,18 @@ clap = { workspace = true }
 futures = { workspace = true }
 hex-literal = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server", "macros"] }
+jsonrpsee-types = { workspace = true }	
+jsonrpsee-core = { workspace = true }
 log = { workspace = true }
 scale-codec = { workspace = true }
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
+jsonrpc-core = "18.0.0" # check for the latest or required version
+jsonrpc-derive = "18.0.0"
+serde = { version = "1.0", features = ["derive"] }
+sp-io = { workspace = true }
+jsonrpc-core-client = "18.0.0" 
+
+
 
 # Substrate
 prometheus-endpoint = { workspace = true }
@@ -80,6 +89,34 @@ fp-dynamic-fee = { workspace = true, features = ["default"] }
 fp-evm = { workspace = true, features = ["default"] }
 fp-rpc = { workspace = true, features = ["default"] }
 aya-runtime = { workspace = true, features = ["std"] }
+
+
+
+jsonrpsee-ws-server = { workspace = true }
+
+tokio = { workspace = true }
+priority-queue = { workspace = true }
+
+tracing = { workspace = true }
+tracing-futures = { workspace = true }
+anyhow = { workspace = true }
+futures-util = { workspace = true }
+assert_matches = { workspace = true }  
+
+hyper = { workspace = true }
+tower-http = { workspace = true }
+tower = { workspace = true }
+lazy_static = { workspace = true }
+env_logger = { workspace = true }
+
+
+[dependencies.tracing-subscriber]
+version = "0.3.18"
+features = ["env-filter"]
+jsonrpsee-http-server = { workspace = true }
+jsonrpsee-ws-server = { workspace = true }    
+lazy_static = { workspace = true }
+
 
 [build-dependencies]
 substrate-build-script-utils = { workspace = true }

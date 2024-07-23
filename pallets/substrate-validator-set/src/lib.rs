@@ -1,16 +1,3 @@
-//! # Validator Set Pallet
-//!
-//! The Validator Set Pallet allows addition and removal of
-//! authorities/validators via extrinsics (transaction calls), in
-//! Substrate-based PoA networks. It also integrates with the im-online pallet
-//! to automatically remove offline validators.
-//!
-//! The pallet depends on the Session pallet and implements related traits for session
-//! management. Currently it uses periodic session rotation provided by the
-//! session pallet to automatically rotate sessions. For this reason, the
-//! validator addition and removal becomes effective only after 2 sessions
-//! (queuing + applying).
-
 #![cfg_attr(not(feature = "std"), no_std)]
 
 mod benchmarking;
@@ -18,21 +5,57 @@ mod mock;
 mod tests;
 pub mod weights;
 
+use sp_std::collections::btree_set::BTreeSet;
+use core::{fmt::Debug, str};
 use frame_support::{
 	ensure,
 	pallet_prelude::*,
 	traits::{EstimateNextSessionRotation, Get, ValidatorSet, ValidatorSetWithIdentification},
 	DefaultNoBound,
 };
+use sp_core::{blake2_256, crypto::UncheckedFrom, ed25519, Pair};
+use sp_std::convert::TryFrom;
+
 use frame_system::pallet_prelude::*;
 use log;
 pub use pallet::*;
+use scale_info::TypeInfo;
 use sp_runtime::traits::{Convert, Zero};
 use sp_staking::offence::{Offence, OffenceError, ReportOffence};
 use sp_std::prelude::*;
 pub use weights::*;
 
 pub const LOG_TARGET: &'static str = "runtime::validator-set";
+
+pub struct CardanoAddress {
+	payment_part: [u8; 28],
+	network_tag: u8,
+}
+impl Clone for CardanoAddress {
+    fn clone(&self) -> Self {
+        CardanoAddress {
+            payment_part: self.payment_part,
+            network_tag: self.network_tag,
+        }
+    }
+}
+impl CardanoAddress {
+	pub fn new(address: &[u8]) -> Option<Self> {
+		if address.len() != 29 {
+			return None;
+		}
+		let mut payment_part = [0u8; 28];
+		payment_part.copy_from_slice(&address[0..28]);
+		Some(CardanoAddress { payment_part, network_tag: address[28] })
+	}
+
+	pub fn to_bytes(&self) -> Vec<u8> {
+		let mut result = Vec::with_capacity(29);
+		result.extend_from_slice(&self.payment_part);
+		result.push(self.network_tag);
+		result
+	}
+}
 
 #[frame_support::pallet()]
 pub mod pallet {
@@ -69,6 +92,15 @@ pub mod pallet {
 	#[pallet::getter(fn offline_validators)]
 	pub type OfflineValidators<T: Config> = StorageValue<_, Vec<T::ValidatorId>, ValueQuery>;
 
+	#[pallet::storage]
+	#[pallet::getter(fn cardano_nft_addresses)]
+	pub type CardanoNftAddresses<T: Config> =
+		StorageMap<_, Blake2_128Concat, Vec<u8>, (Vec<u8>, Vec<u8>)>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn validator_public_keys)]
+	pub type ValidatorPublicKeys<T: Config> = StorageValue<_, Vec<Vec<u8>>, ValueQuery>;
+
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
 	pub enum Event<T: Config> {
@@ -77,6 +109,7 @@ pub mod pallet {
 
 		/// Validator removal initiated. Effective in ~2 sessions.
 		ValidatorRemovalInitiated(T::ValidatorId),
+		ValidatorRegistered(T::ValidatorId),
 	}
 
 	// Errors inform users that something went wrong.
@@ -86,6 +119,10 @@ pub mod pallet {
 		TooLowValidatorCount,
 		/// Validator is already in the validator set.
 		Duplicate,
+		InvalidNFTMintEvent,
+		NotEligible,
+		InvalidCardanoKey,
+		InvalidCardanoAddress,
 	}
 
 	#[pallet::hooks]
@@ -94,7 +131,7 @@ pub mod pallet {
 	#[pallet::genesis_config]
 	#[derive(DefaultNoBound)]
 	pub struct GenesisConfig<T: Config> {
-		pub initial_validators: Vec<T::ValidatorId>,
+		pub initial_validators: Vec<<T as pallet_session::Config>::ValidatorId>,
 	}
 
 	#[pallet::genesis_build]
@@ -140,11 +177,168 @@ pub mod pallet {
 
 			Ok(())
 		}
+
+		#[pallet::call_index(2)]
+		#[pallet::weight(<T as pallet::Config>::WeightInfo::register_validator())]
+		pub fn register_validator(
+			origin: OriginFor<T>,
+			nft_policy_id: Vec<u8>,
+			nft_asset_name: Vec<u8>,
+			cardano_address: Vec<u8>,
+			recipient_address: T::AccountId,
+			cardano_private_key: Vec<u8>,
+		) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+	
+			ensure!(
+				Self::verify_cardano_nft_owner(
+					&cardano_address,
+					&nft_policy_id,
+					&nft_asset_name,
+					&cardano_private_key
+				)?,
+				Error::<T>::NotEligible
+			);
+	
+			let validator_id = T::ValidatorIdOf::convert(recipient_address.clone())
+				.ok_or(Error::<T>::NotEligible)?;
+	
+			Self::do_add_validator(validator_id.clone())?;
+	
+			Self::deposit_event(Event::ValidatorRegistered(validator_id));
+	
+			Ok(())
+		}
+		
+
+		#[pallet::weight(10_000)]
+		pub fn add_nft_address(
+			origin: OriginFor<T>,
+			cardano_address: Vec<u8>,
+			policy_id: Vec<u8>,
+			asset_name: Vec<u8>,
+		) -> DispatchResult {
+			ensure_root(origin)?;
+			CardanoNftAddresses::<T>::insert(cardano_address, (policy_id, asset_name));
+			Ok(())
+		}
+
+		#[pallet::weight(10_000)]
+		pub fn remove_nft_address(
+			origin: OriginFor<T>,
+			cardano_address: Vec<u8>,
+		) -> DispatchResult {
+			ensure_root(origin)?;
+			CardanoNftAddresses::<T>::remove(cardano_address);
+			Ok(())
+		}
 	}
 }
 
 impl<T: Config> Pallet<T> {
-	fn do_add_validator(validator_id: T::ValidatorId) -> DispatchResult {
+	// pub fn initialize_nft_addresses(addresses: Vec<Vec<u8>>) {
+    //     let address_set: BTreeSet<Vec<u8>> = addresses.into_iter().collect();
+    //     ValidNftAddresses::<T>::put(address_set);
+    // }
+
+    // fn is_valid_nft_address(address: &[u8]) -> bool {
+    //     ValidNftAddresses::<T>::get().contains(address)
+    // }
+	fn private_key_to_public(private_key: &[u8]) -> Option<[u8; 32]> {
+		if private_key.len() != 32 {
+			return None;
+		}
+		let seed = private_key.try_into().ok()?;
+		let pair = ed25519::Pair::from_seed(&seed);
+		Some(pair.public().0)
+	}
+	pub fn derive_cardano_address(public_key: &[u8], network_tag: u8) -> Option<CardanoAddress> {
+		if public_key.len() != 32 {
+			return None;
+		}
+		let ed25519_public = ed25519::Public::try_from(public_key).ok()?;
+		let hashed_key = blake2_256(ed25519_public.as_ref());
+		let mut payment_part = [0u8; 28];
+		payment_part.copy_from_slice(&hashed_key[0..28]);
+		Some(CardanoAddress { payment_part, network_tag })
+	}
+
+	pub fn verify_cardano_address(address: &CardanoAddress, public_key: &[u8]) -> bool {
+		if let Some(derived_address) = Self::derive_cardano_address(public_key, address.network_tag)
+		{
+			derived_address.payment_part == address.payment_part
+		} else {
+			false
+		}
+	}
+	fn is_eligible_validator(
+		cardano_address: &[u8],
+		nft_policy_id: &[u8],
+		nft_asset_name: &[u8],
+	) -> bool {
+		fn is_valid_nft(policy_id: &[u8], asset_name: &[u8]) -> bool {
+			let valid_nfts = vec![("policy_id_1", "asset_name_1"), ("policy_id_2", "asset_name_2")];
+			let policy_id_str = core::str::from_utf8(policy_id).ok();
+			let asset_name_str = core::str::from_utf8(asset_name).ok();
+
+			match (policy_id_str, asset_name_str) {
+				(Some(policy_id_str), Some(asset_name_str)) => {
+					valid_nfts.contains(&(policy_id_str, asset_name_str))
+				},
+				_ => false,
+			}
+		}
+
+		// Check if the Cardano address owns this NFT
+		Self::check_nft_ownership(cardano_address, nft_policy_id, nft_asset_name)
+			&& is_valid_nft(nft_policy_id, nft_asset_name)
+	}
+	fn verify_cardano_nft_owner(
+		cardano_address: &[u8],
+		nft_policy_id: &[u8],
+		nft_asset_name: &[u8],
+		cardano_private_key: &[u8],
+	) -> Result<bool, DispatchError> {
+		// First, verify the private key
+		let public_key = Self::private_key_to_public(cardano_private_key)
+			.ok_or(Error::<T>::InvalidCardanoKey)?;
+	
+		// Derive address from public key
+		let derived_address = Self::derive_cardano_address(&public_key, cardano_address[28])
+			.ok_or(Error::<T>::InvalidCardanoAddress)?;
+	
+		// Check if derived address matches the provided address
+		if derived_address.to_bytes() != cardano_address {
+			return Err(Error::<T>::InvalidCardanoAddress.into());
+		}
+	
+		// Check if the address is in storage
+		let stored_nft = CardanoNftAddresses::<T>::get(cardano_address.to_vec());
+	
+		match stored_nft {
+			Some((stored_policy_id, stored_asset_name)) => {
+				// Check if the stored NFT matches the provided NFT
+				if stored_policy_id == nft_policy_id && stored_asset_name == nft_asset_name {
+					Ok(true)
+				} else {
+					Ok(false)
+				}
+			},
+			None => Ok(false),
+		}
+	}
+	fn check_nft_ownership(address: &[u8], policy_id: &[u8], asset_name: &[u8]) -> bool {
+		let key = address.to_vec();
+		if let Some((stored_policy_id, stored_asset_name)) = CardanoNftAddresses::<T>::get(key) {
+			stored_policy_id == policy_id && stored_asset_name == asset_name
+		} else {
+			false
+		}
+	}
+
+	fn do_add_validator(
+		validator_id: <T as pallet_session::Config>::ValidatorId,
+	) -> DispatchResult {
 		ensure!(!<Validators<T>>::get().contains(&validator_id), Error::<T>::Duplicate);
 		<Validators<T>>::mutate(|v| v.push(validator_id.clone()));
 
@@ -154,7 +348,9 @@ impl<T: Config> Pallet<T> {
 		Ok(())
 	}
 
-	fn do_remove_validator(validator_id: T::ValidatorId) -> DispatchResult {
+	fn do_remove_validator(
+		validator_id: <T as pallet_session::Config>::ValidatorId,
+	) -> DispatchResult {
 		let mut validators = <Validators<T>>::get();
 
 		// Ensuring that the post removal, target validator count doesn't go
@@ -175,7 +371,7 @@ impl<T: Config> Pallet<T> {
 	}
 
 	// Adds offline validators to a local cache for removal on new session.
-	fn mark_for_removal(validator_id: T::ValidatorId) {
+	fn mark_for_removal(validator_id: <T as pallet_session::Config>::ValidatorId) {
 		<OfflineValidators<T>>::mutate(|v| v.push(validator_id));
 		log::debug!(target: LOG_TARGET, "Offline validator marked for auto removal.");
 	}
@@ -242,14 +438,21 @@ impl<T: Config> EstimateNextSessionRotation<BlockNumberFor<T>> for Pallet<T> {
 // Here it just returns the same ValidatorId.
 pub struct ValidatorOf<T>(sp_std::marker::PhantomData<T>);
 
-impl<T: Config> Convert<T::ValidatorId, Option<T::ValidatorId>> for ValidatorOf<T> {
-	fn convert(account: T::ValidatorId) -> Option<T::ValidatorId> {
+impl<T: Config>
+	Convert<
+		<T as pallet_session::Config>::ValidatorId,
+		Option<<T as pallet_session::Config>::ValidatorId>,
+	> for ValidatorOf<T>
+{
+	fn convert(
+		account: <T as pallet_session::Config>::ValidatorId,
+	) -> Option<<T as pallet_session::Config>::ValidatorId> {
 		Some(account)
 	}
 }
 
 impl<T: Config> ValidatorSet<T::ValidatorId> for Pallet<T> {
-	type ValidatorId = T::ValidatorId;
+	type ValidatorId = <T as pallet_session::Config>::ValidatorId;
 	type ValidatorIdOf = ValidatorOf<T>;
 
 	fn session_index() -> sp_staking::SessionIndex {
@@ -262,14 +465,24 @@ impl<T: Config> ValidatorSet<T::ValidatorId> for Pallet<T> {
 }
 
 impl<T: Config> ValidatorSetWithIdentification<T::ValidatorId> for Pallet<T> {
-	type Identification = T::ValidatorId;
+	type Identification = <T as pallet_session::Config>::ValidatorId;
 	type IdentificationOf = ValidatorOf<T>;
 }
 
 // Offence reporting and unresponsiveness management.
 // This is for the ImOnline pallet integration.
-impl<T: Config, O: Offence<(T::ValidatorId, T::ValidatorId)>>
-	ReportOffence<T::AccountId, (T::ValidatorId, T::ValidatorId), O> for Pallet<T>
+impl<
+		T: Config,
+		O: Offence<(
+			<T as pallet_session::Config>::ValidatorId,
+			<T as pallet_session::Config>::ValidatorId,
+		)>,
+	>
+	ReportOffence<
+		T::AccountId,
+		(<T as pallet_session::Config>::ValidatorId, <T as pallet_session::Config>::ValidatorId),
+		O,
+	> for Pallet<T>
 {
 	fn report_offence(_reporters: Vec<T::AccountId>, offence: O) -> Result<(), OffenceError> {
 		let offenders = offence.offenders();

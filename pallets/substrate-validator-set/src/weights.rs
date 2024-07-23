@@ -36,6 +36,7 @@ use core::marker::PhantomData;
 pub trait WeightInfo {
 	fn add_validator() -> Weight;
 	fn remove_validator() -> Weight;
+	fn register_validator() -> Weight;
 }
 
 /// Weights for validator_set using the Substrate node and recommended hardware.
@@ -63,6 +64,9 @@ impl<T: frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(1_u64))
 			.saturating_add(T::DbWeight::get().writes(1_u64))
 	}
+	fn register_validator() -> Weight {
+        Weight::from_parts(10_000_000_000, 0)
+    }
 }
 
 // For backwards compatibility and tests
@@ -89,5 +93,9 @@ impl WeightInfo for () {
 			.saturating_add(RocksDbWeight::get().reads(1_u64))
 			.saturating_add(RocksDbWeight::get().writes(1_u64))
 	}
+	fn register_validator() -> Weight {
+		Weight::from_parts(10_000_000_000, 0)
+	}
+	
 }
 

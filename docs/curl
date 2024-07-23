@@ -1,0 +1,20 @@
+curl -X POST http://localhost:5555 \
+-H "Content-Type: application/json" \
+-d '{
+  "jsonrpc": "2.0",
+  "method": "submit_event",
+  "params": [{
+    "id": 1,
+    "event_type": "NFTMint",
+    "data": {
+      "tx_hash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+      "tx_slot": 123456,
+      "nft_policy_id": "policy123",
+      "nft_asset_name": "CoolNFT",
+      "recipient_address": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+    },
+    "timestamp": 1625097600,
+    "block_height": 1000000
+  }, 10],
+  "id": 1
+}'
